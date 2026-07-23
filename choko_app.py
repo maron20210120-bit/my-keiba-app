@@ -48,7 +48,7 @@ with tab2:
     search_name = st.text_input("調べたい馬の名前を入力してください", value="レッドロスタム")
     if st.button("検索実行"):
         try:
-            conn = sqlite3.connect("keiba_training.db")
+            conn = sqlite3.connect("keiba_training_light.db")
             df_hanro = pd.read_sql(f"SELECT 年月日, '坂路' AS コース, Time1 AS 全体タイム, Lap2, Lap1, training_score FROM scored_hanro_training WHERE 馬名='{search_name}'", conn)
             df_wood = pd.read_sql(f"SELECT 年月日, 'ウッド' AS コース, [5F] AS 全体タイム, Lap2, Lap1, training_score FROM scored_wood_training WHERE 馬名='{search_name}'", conn)
             conn.close()
@@ -65,7 +65,7 @@ with tab3:
 
     if st.button("🚀 シミュレーションを実行する", type="primary"):
         try:
-            conn = sqlite3.connect("keiba_training.db")
+            conn = sqlite3.connect("keiba_training_light.db")
             query = f"""
                 SELECT h.年月日, h.馬名, h.training_score, r.着順, r.単勝オッズ 
                 FROM scored_hanro_training h
