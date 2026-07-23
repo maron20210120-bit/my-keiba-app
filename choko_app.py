@@ -1,36 +1,29 @@
 import streamlit as st
 import sqlite3
 import pandas as pd
+import plotly.express as px
 import keiba_app_core
 
 st.set_page_config(page_title="独自競馬予想アプリ", page_icon="🐴", layout="wide")
 st.title("🐴 独自調教スコア予想アプリ")
 st.caption("JRA-VANデータ連動システム")
 
-tab1, tab2, tab3 = st.tabs(["🏆 出馬表・自動予想", "🔍 馬名検索", "⚙️ データ管理"])
+tab1, tab2, tab3, tab4 = st.tabs(["🏆 出馬表・自動予想", "🔍 馬名検索", "📈 的中・回収率検証", "⚙️ データ管理"])
 
-# --- 背景色を自動で塗り分けるためのデザイン関数 ---
+# 各行に色をつける関数
 def color_rows(row):
-    # 行全体の色を初期化（透明）
     bg_color = ""
-
-    # 予想印の文字に合わせて背景色を決定
-    if "◎" in str(row["予想印"]):
-        bg_color = "background-color: #fff3cd; color: #856404; font-weight: bold;"  # 薄い黄色
-    elif "〇" in str(row["予想印"]):
-        bg_color = "background-color: #f8d7da; color: #721c24; font-weight: bold;"  # 薄いピンク
-    elif "▲" in str(row["予想印"]):
-        bg_color = "background-color: #d1ecf1; color: #0c5460; font-weight: bold;"  # 薄い水色
-    elif "△" in str(row["予想印"]):
-        bg_color = "background-color: #e2e3e5; color: #383d41;"  # 薄いグレー
-
+    if "◎" in str(row["予想印"]): bg_color = "background-color: #fff3cd; color: #856404; font-weight: bold;"
+    elif "〇" in str(row["予想印"]): bg_color = "background-color: #f8d7da; color: #721c24; font-weight: bold;"
+    elif "▲" in str(row["予想印"]): bg_color = "background-color: #d1ecf1; color: #0c5460; font-weight: bold;"
+    elif "△" in str(row["予想印"]): bg_color = "background-color: #e2e3e5; color: #383d41;"
     return [bg_color] * len(row)
 
+# タブ1: 出馬表・自動予想画面
 with tab1:
     st.header("今週末のレース予想")
     default_horses = "エヒト, レッドロスタム, リオサラ, ルクスノア, マクアケ"
     input_horses = st.text_area("出走馬リスト", value=default_horses)
-
     if st.button("📊 予想印を自動計算する", type="primary"):
         try:
             horse_list = [h.strip() for h in input_horses.split(",") if h.strip()]
@@ -39,28 +32,21 @@ with tab1:
                 score = keiba_app_core.get_latest_score(horse)
                 race_data.append({"馬名": horse, "調教スコア": score})
             df_race = pd.DataFrame(race_data).sort_values(by="調教スコア", ascending=False).reset_index(drop=True)
-
             df_race["予想印"] = "・"
             if len(df_race) > 0: df_race.loc[0, "予想印"] = "◎ (本命)"
             if len(df_race) > 1: df_race.loc[1, "予想印"] = "〇 (対抗)"
             if len(df_race) > 2: df_race.loc[2, "予想印"] = "▲ (単穴)"
             for i in range(3, min(5, len(df_race))): df_race.loc[i, "予想印"] = "△ (連下)"
-
-            # 【カラフル装飾の適用】
-            # .style.apply を使って、各行に色をつける関数を呼び出します
             styled_df = df_race[["予想印", "馬名", "調教スコア"]].style.apply(color_rows, axis=1).format(precision=1)
-
             st.subheader("📋 予想結果一覧")
-            # 装飾したデータを画面に表示
             st.dataframe(styled_df, use_container_width=True)
-
         except Exception:
-            st.error("⚠️ データベースが未作成の可能性があります。『データ管理』タブで更新を行ってください。")
+            st.error("⚠️ データベースを『データ管理』タブで更新してください。")
 
+# タブ2: 馬名検索画面
 with tab2:
     st.header("🔍 調教履歴個別検索")
     search_name = st.text_input("調べたい馬の名前を入力してください", value="レッドロスタム")
-
     if st.button("検索実行"):
         try:
             conn = sqlite3.connect("keiba_training.db")
@@ -73,7 +59,74 @@ with tab2:
         except Exception:
             st.error("⚠️ まだデータが登録されていません。")
 
+# タブ3: 【新設】的中・回収率検証画面
 with tab3:
+    st.header("📈 独自調教スコア 回収率検証シミュレーター")
+    st.write("過去の調教データと実際のレース結果を合流させ、このアプリのロジックがどれだけ儲かるかを検証します。")
+
+    # ユーザーが検証したいスコアのボーダーを設定できるスライダー
+    score_threshold = st.slider("検証する最低調教スコア", min_value=100.0, max_value=140.0, value=115.0, step=0.5)
+
+    if st.button("🚀 シミュレーションを実行する", type="primary"):
+        try:
+            conn = sqlite3.connect("keiba_training.db")
+            # データベース上で調教スコアとレース結果を「年月日」と「馬名」でガッチャンコ(結合)する
+            query = f"""
+                SELECT h.年月日, h.馬名, h.training_score, r.着順, r.単勝オッズ 
+                FROM scored_hanro_training h
+                INNER JOIN race_results r ON h.馬名 = r.馬名 AND h.年月日 = r.年月日
+                WHERE h.training_score >= {score_threshold}
+                UNION ALL
+                SELECT w.年月日, w.馬名, w.training_score, r.着順, r.単勝オッズ 
+                FROM scored_wood_training w
+                INNER JOIN race_results r ON w.馬名 = r.馬名 AND w.年月日 = r.年月日
+                WHERE w.training_score >= {score_threshold}
+            """
+            df_v = pd.read_sql(query, conn)
+            conn.close()
+
+            if df_v.empty:
+                st.warning("指定したスコア以上の馬が、過去のレース結果データ内に見つかりませんでした。")
+            else:
+                # 数値変換と着順データの整形
+                df_v["単勝オッズ"] = pd.to_numeric(df_v["単勝オッズ"], errors="coerce").fillna(0)
+                df_v["確定着順"] = pd.to_numeric(df_v["着順"], errors="coerce").fillna(99)
+
+                # 的中判定（1着なら的中）と払戻金の計算
+                df_v["is_win"] = df_v["着順"].astype(str).str.strip().isin(["1", "01", "１"])
+                df_v["payback"] = df_v.apply(lambda r: r["単勝オッズ"] * 100 if r["is_win"] else 0, axis=1)
+
+                # 各種成績指数の計算
+                total_bets = len(df_v)
+                win_counts = df_v["is_win"].sum()
+                total_investment = total_bets * 100
+                total_return = df_v["payback"].sum()
+
+                hit_rate = (win_counts / total_bets * 100) if total_bets > 0 else 0
+                recovery_rate = (total_return / total_investment * 100) if total_investment > 0 else 0
+
+                # 画面への集計結果表示（カード形式）
+                col1, col2, col3 = st.columns(3)
+                col1.metric("総買い目（頭数）", f"{total_bets} 頭")
+                col2.metric("🎯 単勝的中率", f"{hit_rate:.1f} %")
+                col3.metric("💰 単勝回収率", f"{recovery_rate:.1f} %")
+
+                # 時系列（日付順）に並び替えて、回収率の累積推移グラフを作成
+                df_v = df_v.sort_values(by="年月日").reset_index(drop=True)
+                df_v["累計投資"] = (df_v.index + 1) * 100
+                df_v["累計払戻"] = df_v["payback"].cumsum()
+                df_v["累計回収率"] = (df_v["累計払戻"] / df_v["累計投資"]) * 100
+
+                st.subheader("📉 回収率の資産推移グラフ（シミュレーション）")
+                fig = px.line(df_v, x="年月日", y="累計回収率", title=f"スコア {score_threshold} 以上の馬を買い続けた場合の累計回収率推移")
+                fig.add_hline(y=100, line_dash="dash", line_color="red", annotation_text="回収率100%ライン")
+                st.plotly_chart(fig, use_container_width=True)
+
+        except Exception as e:
+            st.error(f"⚠️ 検証中にエラーが発生しました。データが正しく取り込まれているか確認してください。 (詳細: {e})")
+
+# タブ4: データ管理画面
+with tab3 if 'tab4' not in locals() else tab4:
     st.header("⚙️ データベース一括更新")
     if st.button("🔄 データを最新にアップデートする"):
         with st.spinner("CSVファイルを読み込み中..."):
@@ -81,5 +134,5 @@ with tab3:
                 keiba_app_core.import_and_score_hanro()
                 keiba_app_core.import_and_score_wood()
                 st.success("🎉 全調教データの更新と再スコア化が完了しました！")
-            except Exception as ex:
-                st.error(f"❌ エラー: CSVファイルが見つかりません。 (エラー型: {type(ex).__name__})")
+            except Exception:
+                st.error("❌ エラーが発生しました。")
